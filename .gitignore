@@ -1,8 +1,11 @@
 .env
 .envprod
 .envtest
-serve
 solidity/
 solidity/.env
 node_modules/
 public/files/
+dist/
+index.html
+owner.txt
+wallet_data.txt
