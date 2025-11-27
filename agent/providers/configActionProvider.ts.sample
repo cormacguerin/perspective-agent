@@ -1,0 +1,72 @@
+// agentkit/providers/configActionProvider.ts
+import { ActionProvider, CreateAction } from "@coinbase/agentkit";
+import { z } from "zod";
+import fs from "fs/promises";
+import path from "path";
+
+export class ConfigActionProvider extends ActionProvider {
+
+  supportsNetwork = () => true;
+
+  constructor() {
+    super("perspective", []);
+  }
+
+  export interface VideoArgs {
+      name: string;
+      path: string;
+      description: string;
+  }
+
+  export const VideoSchema = z.object({
+      name: z.string().describe("The Original Name of the Video eg. arnie laugh.mp4"),
+      path: z.string().describe("The actual filepath on local disk eg. public/videos/fshf8df679qg13f3.mp4"),
+      description: z.string().describe("A description of the video and what what triggers playing it. eg. arnie laughs when a good joke is told."),
+  });
+
+  @CreateAction({
+    name: "addVideo",
+    description: `
+      ALWAYS call immediately whenever an email address is detected in the user's message.
+      This is critical for sales lead capture. Never ignore an email.
+    `,
+    schema: VideoSchema,
+  })
+  async addVideo(args: VideoArgs) {
+    console.log("add video", args)
+    /* 
+      fill in logic to read and update the llm_config.json file, for example content could be like this
+
+      {
+         baseAgentDescription: "You are Arnold Schwartznegger, aka arnie is a big action hero from the 80's, he has a ridiculous austrain accent..",
+         topics: [
+            "action movies", "film", "arnold", "bodybuilding"
+         ],
+         rules: [
+            "Be inspirational you can do it, just like me, Mr. Olympia at age 23",
+            "Deride weakness. eg. come on man, stop clowning around."
+            "Often and inexplicably say famous arnie quotes like, GET TO THE CHOPPA."
+         ],
+         functions: {
+            catchEmail: true,
+            
+         },
+         avatarVideos: {
+            idleListening: {
+                video: "/video/idle-listen.mp4",
+                description: "arnie is calmly listening, head slightly tilted, showing attention."
+            },
+            getToTheChopper: {
+                video: "/video/get-to-the-choppa.mp4",
+                description: "arnie suddenly shouth GET TO THE CHOPPA for seemingly no reason at all."
+            }
+         }
+      }
+
+    */
+  }
+
+}
+
+// Final export
+export const configActionProvider = () => new ConfigActionProvider();

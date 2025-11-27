@@ -1,0 +1,8 @@
+.env
+.envprod
+.envtest
+serve
+solidity/
+solidity/.env
+node_modules/
+public/files/
