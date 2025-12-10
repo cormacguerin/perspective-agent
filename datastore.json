@@ -1,0 +1,46 @@
+[
+  {
+    "id": "data-1765128423385-0hrl6",
+    "name": "Screenshot 2025-12-06 1.23.31 PM.png",
+    "path": "/home/sites/perspective_agent/data/user/1765128423282-730960628.png",
+    "owner": "0x0000000000000000000000000000000000000000",
+    "agentId": null,
+    "metadata": {
+      "uploadTimestamp": "2025-12-07T17:27:03.385Z",
+      "type": "pending",
+      "tags": [],
+      "description": null,
+      "inferredFrom": null
+    }
+  },
+  {
+    "id": "data-1765139797081-pqjpv",
+    "name": "Screen recording 2025-12-05 1.24.22 PM (1).webm",
+    "path": "/home/sites/perspective_agent/data/user/1765139781508-963181921.webm",
+    "owner": "0x0000000000000000000000000000000000000000",
+    "agentId": null,
+    "metadata": {
+      "uploadTimestamp": "2025-12-07T20:36:37.081Z",
+      "type": "pending",
+      "tags": [],
+      "description": null,
+      "inferredFrom": null
+    }
+  },
+  {
+    "id": "data-1765291516362-eysje",
+    "name": "PXL_20220106_042744605.jpg",
+    "path": "/home/sites/perspective_agent/data/user/10a516b5-fa13-4710-8631-cde128bbd51b.jpg",
+    "owner": "0x0000000000000000000000000000000000000000",
+    "agentId": "null",
+    "metadata": {
+      "uploadTimestamp": "2025-12-10T00:03:26.652Z",
+      "type": "avatarVideo",
+      "tags": [
+        "avatar"
+      ],
+      "description": "This is an avatar image uploaded by the user.",
+      "inferredFrom": "avatar image description"
+    }
+  }
+]

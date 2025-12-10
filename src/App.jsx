@@ -1,12 +1,31 @@
 import React, { useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import Navbar from "./components/Navbar";
-import Chat from "./components/Chat";     // your current Upload page 
-import Upload from "./components/Upload";         // optional second page
+import Chat from "./components/Chat"; 
+import AvatarVideo from "./components/AvatarVideo";
+import Upload from "./components/Upload"; 
 import { connectWallet } from "./utils/wallet";
 
 const App = () => {
   const [address, setAddress] = useState(null);
+  const [nextVideo, setNextVideo] = useState(null);
+
+  const playEmotion = (emotionName) => {
+    setNextVideo({ name: emotionName }); // e.g. 'x-idle.mp4'
+  };
+
+  const videoSources = {
+    "mog-idle-1": {
+      path: "/media/mog-idle.mp4",
+      tag: "idle",
+      description: "just chilling"
+    },
+    "mog-idle-2": { 
+      path: "/media/mog-idle.mp4",
+      tag: "idle",
+      description: "just chilling"
+    }
+  };
 
   async function handleConnect() {
     try {
@@ -34,11 +53,6 @@ const App = () => {
     */}
       <div className="w-screen max-w-6xl mx-auto min-h-screen flex flex-col">
 
-        {/* Glass navbar
-        <header className="bg-black/30 backdrop-blur-xl border-b border-white/10">
-          <Navbar />
-        </header>
-
         {/* FULLSCREEN GRID LAYOUT */}
         <main className="flex-1 flex flex-row w-full">
           <section className="w-full lg:w-3/5 lg:w-1/1 flex flex-col">
@@ -48,25 +62,31 @@ const App = () => {
             </Routes>
           </section>
 
-          {/* RIGHT: Video/Render Area – hidden on mobile, visible on lg+ */}
-          <section className="hidden lg:block w-full lg:w-2/5 bg-black/40 backdrop-blur-md border-l border-white/10 p-8 overflow-hidden">
-
+          {/* Render Area */}
+          <section className="hidden lg:block w-full lg:w-2/5 bg-black/40 backdrop-blur-md border-l border-white/10 p-8 sticky top-0 h-screen overflow-hidden z-10">
             <div className="w-full h-full flex items-center justify-center rounded-2xl bg-gray-900/50 border border-dashed border-gray-700 text-gray-500">
-              <div className="text-center">
-                <svg className="w-24 h-24 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 16h4m10 0h4M4 20h16" />
-                </svg>
-                <p className="text-xl">Video Render Area</p>
-                <p className="text-sm mt-2">Will appear here when media is uploaded</p>
-              </div>
+              
+              {videoSources && Object.keys(videoSources).length > 0 ? (
+                <AvatarVideo newVideo={nextVideo} videoSources={videoSources} />
+              ) : (
+                <div className="text-center">
+                  <svg className="w-24 h-24 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 16h4m10 0h4M4 20h16" />
+                  </svg>
+                  <p className="text-xl">Video Render Area</p>
+                  <p className="text-sm mt-2">Will appear here when media is uploaded</p>
+                </div>
+              )}
+              
             </div>
           </section>
         </main>
 
-        {/* Footer */}
+        {/* 
         <footer className="bg-black/50 backdrop-blur-md border-t border-white/10 py-5 text-center text-gray-500 text-sm">
           © 2025 PerspectiveAI
         </footer>
+          Footer */}
       </div>
     </>
   );

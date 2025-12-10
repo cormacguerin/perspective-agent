@@ -3,58 +3,66 @@ import { ActionProvider, CreateAction } from "@coinbase/agentkit";
 import { z } from "zod";
 import fs from "fs/promises";
 import path from "path";
+//import { auth } from './Auth.js';
 
 // ---------------------------------------------------------------------------
-// Types & Schemas
+// Interface & Schemas
 // ---------------------------------------------------------------------------
+const AgentConfigTemplate = {
+  baseAgentDescription: "",
+  topics: [] as string[],
+  rules: [] as string[],
+  functions: {} as { [key: string]: any },
+  avatarVideos: {} as Record<string, any>
+};
+export type AgentConfig = typeof AgentConfigTemplate;
 
-interface VideoArgs {
-  name: string;
-  path: string;
-  description: string;
-}
-
-const VideoSchema = z.object({
-  name: z.string().describe("Original name of the video, e.g. arnie_laugh.mp4"),
-  path: z.string().describe("Relative web-accessible path, e.g. /videos/arnie_laugh.mp4"),
-  description: z.string().describe("When this video should be triggered"),
+const EditConfigSchema = z.object({
+  op: z.enum(["append", "remove", "set"]).describe("The config edit operation."),
+  key: z.enum(Object.keys(AgentConfigTemplate) as [string, ...string[]]).describe("The config key to edit"),
+  value: z.any().optional().describe("The new value to append, remove or set."),
+  match: z.record(z.any()).optional().describe("Optional matcher for selecting items")
 });
 
-const AvatarVideoKeySchema = z.string().regex(/^[a-zA-Z0-9_]+$/).describe("Unique key for the avatar video (e.g. idleListening, getToTheChopper)");
-
-// Full config shape (mirrors your example)
-interface LLMConfig {
-  baseAgentDescription: string;
-  topics: string[];
-  rules: string[];
-  functions: {
-    catchEmail?: boolean;
-    [key: string]: any;
-  };
-  avatarVideos: Record<
-    string,
-    {
-      video: string;
-      description: string;
-    }
-  >;
+interface EditConfigArgs {
+  op: "append" | "remove" | "set";
+  key: keyof AgentConfig;
+  value?: any;
+  match?: Record<string, any>;
 }
 
 // Path to the persistent config file
 const CONFIG_PATH = path.resolve(process.cwd(), "llm_config.json");
 
-// Helper: load config with defaults
-async function loadConfig(): Promise<LLMConfig> {
+export async function loadConfig(): Promise<AgentConfig> {
+
   try {
+
     const data = await fs.readFile(CONFIG_PATH, "utf-8");
-    return JSON.parse(data) as LLMConfig;
+    return JSON.parse(data) as AgentConfig;
+
   } catch (err: any) {
+
     if (err.code === "ENOENT") {
+
       // Return a sensible default if file doesn't exist yet
-      const defaultConfig: LLMConfig = {
+      const defaultConfig: AgentConfig = {
+        baseAgentDescription:
+          "You are the perspective AI Agent, a helpful and insightful agent.",
+        topics: ["AI", "on-chain", "builder"],
+        rules: [
+          "Always try to help the user achieve their goals.",
+        ],
+        functions: {
+          catchEmail: true,
+        },
+        avatarVideos: {
+        },
+      }
+      const arnieConfig: AgentConfig = {
         baseAgentDescription:
           "You are Arnold Schwarzenegger, a legendary action hero and bodybuilder with an over-the-top Austrian accent.",
-        topics: ["action movies", "bodybuilding", "motivation", "80s cinema"],
+        topics: ["action hero", "bodybuilding", "motivation", "80s cinema"],
         rules: [
           "Always be over-the-top and dramatic.",
           "Use famous Arnold quotes frequently and randomly.",
@@ -70,197 +78,184 @@ async function loadConfig(): Promise<LLMConfig> {
           },
         },
       };
-      await saveConfig(defaultConfig);
       return defaultConfig;
+
     }
+
     throw err;
   }
 }
 
-// Helper: atomically save config
-async function saveConfig(config: LLMConfig): Promise<void> {
-  const tmpPath = CONFIG_PATH + ".tmp";
-  await fs.writeFile(tmpPath, JSON.stringify(config, null, 2), "utf-8");
-  await fs.rename(tmpPath, CONFIG_PATH);
-}
+const _config: AgentConfig = await loadConfig();
 
 // ---------------------------------------------------------------------------
 // ConfigActionProvider
 // ---------------------------------------------------------------------------
 
 export class ConfigActionProvider extends ActionProvider {
+
+  private static configLock = false;
+  private static config = _config;
+  private static configAtom: Promise<void> | null = null;
+
+  
+  //private static config: AgentConfig;
   supportsNetwork = () => true;
 
-  constructor() {
-    super("config", []); // "config" is a good namespace
+  constructor(private readonly authProvider: any, private readonly userAddress: string) {
+    super("config", []);
+    //this.authProvider = authProvider;
+    //this.userAddress = reqAddr;
   }
 
-  // -------------------------------------------------------------------------
-  // 1. Add / Update a video trigger
-  // -------------------------------------------------------------------------
+  private isOwner(): boolean {
+    const isOwner_ = this.authProvider.isOwnerAddress(this.userAddress);
+    if (!isOwner_) throw new Error("Access denied: owner only");
+    return true;
+  }
+
+  // List Config
+  // NEVER include comments, explanations, markdown or code fences,
   @CreateAction({
-    name: "addOrUpdateAvatarVideo",
-    description: "Add a new avatar video or update an existing one. Use this whenever the user wants Arnold to play a specific clip on certain triggers.",
-    schema: VideoSchema.and(
-      z.object({
-        key: AvatarVideoKeySchema.describe(
-          "Unique identifier for this video trigger (e.g. goodJoke, getToTheChoppa, angry). Use camelCase or snake_case."
-        ),
+    name: "listConfig",
+    description: `
+      ACCEPTS params to format as raw or pretty, default is pretty.
+       - Raw mode must ONLY be used when explicitly requested using raw:true.
+      LISTS the agent's configuration.
+      RETURNS a JSON string response as below
+      {
+        mode: "<raw or pretty>",
+        style: "style",
+        action: "listConfig",
+        data: <the config in json format>
+      }
+    `,
+    schema: z.object({
+      raw: z.boolean().default(false).optional().describe("Set true to show full raw JSON config"),
+    })
+  })
+  async listConfig(args: { raw?: boolean }): Promise<string> {
+
+    this.isOwner();
+
+    const cfg = ConfigActionProvider.config;
+    if (args.raw) {
+      return  JSON.stringify({
+          mode: "raw",
+          style: "system",
+          data: cfg
       })
-    ),
-  })
-  async addOrUpdateAvatarVideo(
-    args: VideoArgs & { key: string }
-  ): Promise<string> {
-    const { key, name, path, description } = args;
-    const config = await loadConfig();
-
-    config.avatarVideos[key] = {
-      video: path.startsWith("/") ? path : `/${path.replace(/^\/+/, "")}`,
-      description,
-    };
-
-    await saveConfig(config);
-    return `Successfully saved avatar video "${name}" under key "${key}". It will now play when the trigger "${key}" is used.`;
-  }
-
-  // -------------------------------------------------------------------------
-  // 2. Remove a video trigger
-  // -------------------------------------------------------------------------
-  @CreateAction({
-    name: "removeAvatarVideo",
-    description: "Remove an avatar video trigger by its key.",
-    schema: z.object({
-      key: AvatarVideoKeySchema,
-    }),
-  })
-  async removeAvatarVideo(args: { key: string }): Promise<string> {
-    const config = await loadConfig();
-    if (!config.avatarVideos[args.key]) {
-      return `No video found with key "${args.key}". Nothing was removed.`;
+    } else {
+      return  JSON.stringify({
+          mode: "pretty",
+          style: "system",
+          data: cfg
+      })
     }
 
-    delete config.avatarVideos[args.key];
-    await saveConfig(config);
-    return `Removed avatar video trigger "${args.key}".`;
   }
 
-  // -------------------------------------------------------------------------
-  // 3. List all current avatar videos
-  // -------------------------------------------------------------------------
+  // Add / Update a video trigger
   @CreateAction({
-    name: "listAvatarVideos",
-    description: "Return all currently configured avatar video triggers and their descriptions.",
-    schema: z.object({}),
+    name: "editConfig",
+    description: "Edit the agent configuratiion config file.",
+    schema: EditConfigSchema,
   })
-  async listAvatarVideos(): Promise<string> {
-    const config = await loadConfig();
-    if (Object.keys(config.avatarVideos).length === 0) {
-      return "No avatar videos configured yet.";
+  async updateAgent(args: EditConfigArgs): Promise<string> {
+
+    this.isOwner();
+
+    // threadsafe just incase
+    if (ConfigActionProvider.configAtom) {
+        await ConfigActionProvider.configAtom;
     }
 
-    const lines = Object.entries(config.avatarVideos).map(
-      ([key, { video, description }]) =>
-        `• ${key} → ${video}\n  Description: ${description}`
-    );
+    const { op, key, value } = args;
+    const cfg = ConfigActionProvider.config;
 
-    return (
-      "Current avatar video triggers:\n\n" + lines.join("\n\n") + "\n"
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // 4. Update base agent description
-  // -------------------------------------------------------------------------
-  @CreateAction({
-    name: "updateBaseAgentDescription",
-    description: "Change the core personality description of the agent.",
-    schema: z.object({
-      description: z.string().min(10).describe("New full personality description"),
-    }),
-  })
-  async updateBaseAgentDescription(args: { description: string }): Promise<string> {
-    const config = await loadConfig();
-    config.baseAgentDescription = args.description.trim();
-    await saveConfig(config);
-    return "Base agent description updated successfully.";
-  }
-
-  // -------------------------------------------------------------------------
-  // 5. Add a new rule
-  // -------------------------------------------------------------------------
-  @CreateAction({
-    name: "addRule",
-    description: "Add a new behavioral rule that Arnold must follow.",
-    schema: z.object({
-      rule: z.string().min(5),
-    }),
-  })
-  async addRule(args: { rule: string }): Promise<string> {
-    const config = await loadConfig();
-    const cleaned = args.rule.trim();
-    if (config.rules.includes(cleaned)) {
-      return "This rule already exists.";
+    if (!(key in cfg)) {
+      throw new Error(`Key "${key}" not found in config`);
     }
-    config.rules.push(cleaned);
-    await saveConfig(config);
-    return `Added new rule: "${cleaned}"`;
-  }
 
-  // -------------------------------------------------------------------------
-  // 6. Remove a rule
-  // -------------------------------------------------------------------------
-  @CreateAction({
-    name: "removeRule",
-    description: "Remove an existing rule by its exact text.",
-    schema: z.object({
-      rule: z.string(),
-    }),
-  })
-  async removeRule(args: { rule: string }): Promise<string> {
-    const config = await loadConfig();
-    const idx = config.rules.findIndex((r) => r === args.rule.trim());
-    if (idx === -1) {
-      return "Rule not found.";
+    if (key === "topics" || key === "rules") {
+      const target = cfg[key] as string[];
+      switch (op) {
+        case "append":
+          if (value === undefined) throw new Error("Append requires a value");
+          target.push(value);
+          break;
+        case "remove":
+          if (value === undefined) throw new Error("Remove requires a value");
+          cfg[key] = target.filter((v: any) => v !== value);
+          break;
+        case "set":
+          if (!Array.isArray(value)) throw new Error("Set requires an array");
+          cfg[key] = value;
+          break;
+        default:
+          throw new Error(`Operation "${op}" not supported on array key "${key}"`);
+      }
+    } else if (key === "functions" || key === "avatarVideos") {
+      const target = cfg[key] as object;
+      switch (op) {
+        case "append":
+          if (typeof value !== "object") throw new Error("Append requires an object");
+          cfg[key] = { ...target, ...value };
+          break;
+        case "set":
+          if (typeof value !== "object") throw new Error("Set requires an object");
+          cfg[key] = value;
+          break;
+        case "remove":
+          if (typeof value === "string") {
+            delete cfg[key][value];
+          } else if (Array.isArray(value)) {
+            for (const k of value) delete cfg[key][k];
+          } else {
+            throw new Error("Remove requires a key name or array of keys for object");
+          }
+          break;
+        default:
+          throw new Error(`Operation "${op}" not supported on object key "${key}"`);
+      }
+    } else {
+      const target = cfg[key] as string;
+      switch (op) {
+        case "set":
+          cfg[key] = value;
+          break;
+        default:
+          throw new Error(`Operation "${op}" not supported on primitive key "${key}"`);
+      }
     }
-    config.rules.splice(idx, 1);
-    await saveConfig(config);
-    return "Rule removed.";
+
+    await this.saveConfig(ConfigActionProvider.config);
+
+    return `Successfully performed "${op}" on config key "${key}".`;
   }
 
-  // -------------------------------------------------------------------------
-  // 7. Toggle function flags (e.g. email capture)
-  // -------------------------------------------------------------------------
-  @CreateAction({
-    name: "toggleFunction",
-    description: "Enable or disable built-in functions like email capture.",
-    schema: z.object({
-      functionName: z.enum(["catchEmail"]),
-      enabled: z.boolean(),
-    }),
-  })
-  async toggleFunction(args: { functionName: string; enabled: boolean }): Promise<string> {
-    const config = await loadConfig();
-    config.functions[args.functionName] = args.enabled;
-    await saveConfig(config);
-    return `${args.functionName} is now ${args.enabled ? "enabled" : "disabled"}.`;
+  async saveConfig(newConfig: AgentConfig) {
+    this.isOwner();
+
+    const previous = ConfigActionProvider.configAtom;
+    const save = (async () => { 
+      if (previous) await previous;
+        const tmp = CONFIG_PATH + '.tmp.' + Date.now();
+        await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
+        await fs.writeFile(tmp, JSON.stringify(newConfig, null, 2));
+        await fs.rename(tmp, CONFIG_PATH);
+        console.log("saved config",newConfig) 
+    })();
+    ConfigActionProvider.configAtom = save.finally(() => {
+      ConfigActionProvider.configAtom = null;
+    });
+    await save;
   }
 
-  // -------------------------------------------------------------------------
-  // 8. Get full current config (for debugging / transparency)
-  // -------------------------------------------------------------------------
-  @CreateAction({
-    name: "getCurrentConfig",
-    description: "Return the entire current LLM configuration (useful for transparency or debugging).",
-    schema: z.object({}),
-  })
-  async getCurrentConfig(): Promise<string> {
-    const config = await loadConfig();
-    return "```json\n" + JSON.stringify(config, null, 2) + "\n```";
-  }
 }
 
-// ---------------------------------------------------------------------------
-// Export factory
-// ---------------------------------------------------------------------------
-export const configActionProvider = () => new ConfigActionProvider();
+// export factory
+export const configActionProvider = (ap: any, reqAddr: string) => {
+  return new ConfigActionProvider(ap, reqAddr);
+};
+
