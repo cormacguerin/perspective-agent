@@ -3,36 +3,48 @@ import { ActionProvider, CreateAction } from "@coinbase/agentkit";
 import { z } from "zod";
 import fs from "fs/promises";
 import path from "path";
+import dotenv from "dotenv";
 //import { auth } from './Auth.js';
 
+dotenv.config();
 // ---------------------------------------------------------------------------
 // Interface & Schemas
 // ---------------------------------------------------------------------------
+const AvatarVideoSchema = z.object({
+  path: z.string(),
+  description: z.string(),
+  idle: z.boolean().default(false),
+  talking: z.boolean().default(false),
+  bored: z.boolean().default(false)
+});
+
 const AgentConfigTemplate = {
   baseAgentDescription: "",
   topics: [] as string[],
   rules: [] as string[],
-  functions: {} as { [key: string]: any },
-  avatarVideos: {} as Record<string, any>
+  functions: {} as Record<string, object>,
+  avatarVideo: {} as Record<string, z.infer<typeof AvatarVideoSchema>>
 };
 export type AgentConfig = typeof AgentConfigTemplate;
 
-const EditConfigSchema = z.object({
-  op: z.enum(["append", "remove", "set"]).describe("The config edit operation."),
-  key: z.enum(Object.keys(AgentConfigTemplate) as [string, ...string[]]).describe("The config key to edit"),
-  value: z.any().optional().describe("The new value to append, remove or set."),
-  match: z.record(z.any()).optional().describe("Optional matcher for selecting items")
+const AgentConfigSchema = z.object({
+  op: z.enum(["set", "remove"]),
+  key: z.enum(Object.keys(AgentConfigTemplate) as [string, ...string[]]),
+  match: z.record(z.any()).optional(),
+  value: z.string()
 });
 
-interface EditConfigArgs {
-  op: "append" | "remove" | "set";
+interface AgentConfigArgs {
+  op: "remove" | "set";
   key: keyof AgentConfig;
-  value?: any;
+  value: string;
   match?: Record<string, any>;
 }
 
 // Path to the persistent config file
-const CONFIG_PATH = path.resolve(process.cwd(), "llm_config.json");
+const CONFIG_PATH = path.resolve(process.cwd(), "agent_config.json");
+const VITE_SERVER_URL = process.env.VITE_SERVER_URL;
+const VITE_AGENT_INSTANCE = process.env.VITE_AGENT_INSTANCE;
 
 export async function loadConfig(): Promise<AgentConfig> {
 
@@ -54,9 +66,12 @@ export async function loadConfig(): Promise<AgentConfig> {
           "Always try to help the user achieve their goals.",
         ],
         functions: {
-          catchEmail: true,
+          catchEmail: {
+              enabled: true,
+              email: "contact@perspective.xyz"
+          }
         },
-        avatarVideos: {
+        avatarVideo: {
         },
       }
       const arnieConfig: AgentConfig = {
@@ -69,12 +84,25 @@ export async function loadConfig(): Promise<AgentConfig> {
           "Mock weakness and praise strength.",
         ],
         functions: {
-          catchEmail: true,
+          catchEmail: {
+              enabled: true,
+              email: "contact@perspective.xyz"
+          }
         },
-        avatarVideos: {
+        avatarVideo: {
+          idleTalking: {
+            path: "${VITE_SERVER_URL}/${VITE_AGENT_INSTANCE}/dataStore/<DATASTORE_ID>",
+            description: "Arine talks",
+            idle: false,
+            talking: true,
+            bored: false,
+          },
           idleListening: {
-            video: "/videos/idle.mp4",
+            path: "${VITE_SERVER_URL}/${VITE_AGENT_INSTANCE}/dataStore/<DATASTORE_ID>",
             description: "Arnold calmly listening with slight head tilt",
+            idle: true,
+            talking: false,
+            bored: false,
           },
         },
       };
@@ -110,7 +138,7 @@ export class ConfigActionProvider extends ActionProvider {
 
   private isOwner(): boolean {
     const isOwner_ = this.authProvider.isOwnerAddress(this.userAddress);
-    if (!isOwner_) throw new Error("Access denied: owner only");
+    if (!isOwner_) return false;
     return true;
   }
 
@@ -119,9 +147,9 @@ export class ConfigActionProvider extends ActionProvider {
   @CreateAction({
     name: "listConfig",
     description: `
+      LISTS the agent's configuration.
       ACCEPTS params to format as raw or pretty, default is pretty.
        - Raw mode must ONLY be used when explicitly requested using raw:true.
-      LISTS the agent's configuration.
       RETURNS a JSON string response as below
       {
         mode: "<raw or pretty>",
@@ -157,11 +185,62 @@ export class ConfigActionProvider extends ActionProvider {
 
   // Add / Update a video trigger
   @CreateAction({
-    name: "editConfig",
-    description: "Edit the agent configuratiion config file.",
-    schema: EditConfigSchema,
+    name: "updateAgentConfig",
+    description: `
+      Adds or Updates the agent 
+
+      including agent description topics, rules, avatar videos, or functions.
+
+      - "op" determines how to modify the field (set, remove)
+      - "key" selects which part of the config to edit
+      - "match" optionally filters which items to remove
+      - "value" is the value to set add or remove
+
+      For description, topics, this is a plain text entry, for functions and avatars it MUST be JSON
+
+      Use this action whenever the user wants to modify the agent's core,
+      When updating avatars, infer the description, idle, talking, bored fields from the conversation or file name if descriptive.
+      ALWAYS use this function if the user talks about avatars or avatar videos.
+
+      Examples:
+      - Change my description to be an expert in blockchain
+      - Add a new topic around onchain data
+      - Upload/Add this new avatar file for me.
+
+      Functions: Are specific functiosn supported by the agent.
+        They ALWAYS have an enable or disable flag
+        eg.
+      catchEmail {
+          enabled: true,
+          email: contact@perspectiveai.xyz
+      }
+
+      Avatar Videos:
+
+      avatarVideo it is a keyed object that describes an avatar.
+
+      1. You need the data-source-id of the video. It MUST be present or we fail.
+      2. Construct the video URL EXACTLY as: "${VITE_SERVER_URL}/${VITE_AGENT_INSTANCE}/dataStore/<data-store-id>"
+      3. ALWAYS USE THE EXACT SAME DATA STORE ID AS THE DATASTORE ID. 
+      4. NEVER set idle, talking or bored unless its clear from the name or user context.
+
+      ALWAYS FORMAT AVATAR VIDEOS IN THIS FORMAT
+
+      "avatarVideo": {
+        "paichan-star-wars-light-saber": {
+          "url": "${VITE_SERVER_URL}/${VITE_AGENT_INSTANCE}/dataStore/<data-store-id>" eg. data-1765709884453-ipt6n,
+          "description": "the avatar is using a light saber",
+          "idle": true, // only true if context suggests
+          "talking": false, // only true if context suggests
+          "bored": false // only true if context suggests
+        },
+        ...
+      }
+
+    `,
+    schema: AgentConfigSchema
   })
-  async updateAgent(args: EditConfigArgs): Promise<string> {
+  async updateAgent(args: AgentConfigArgs): Promise<string> {
 
     this.isOwner();
 
@@ -173,65 +252,99 @@ export class ConfigActionProvider extends ActionProvider {
     const { op, key, value } = args;
     const cfg = ConfigActionProvider.config;
 
+    console.log("update agent args", args)
+
     if (!(key in cfg)) {
-      throw new Error(`Key "${key}" not found in config`);
+        return(`Key "${key}" not found in config`);
     }
 
     if (key === "topics" || key === "rules") {
+
       const target = cfg[key] as string[];
       switch (op) {
-        case "append":
-          if (value === undefined) throw new Error("Append requires a value");
-          target.push(value);
+        case "set":
+          if (!Array.isArray(value)) return("Set requires an array");
+          cfg[key] = value;
           break;
         case "remove":
-          if (value === undefined) throw new Error("Remove requires a value");
+          if (value === undefined) return("Remove requires a value");
           cfg[key] = target.filter((v: any) => v !== value);
           break;
-        case "set":
-          if (!Array.isArray(value)) throw new Error("Set requires an array");
-          cfg[key] = value;
-          break;
         default:
-          throw new Error(`Operation "${op}" not supported on array key "${key}"`);
+          return(`Operation "${op}" not supported on array key "${key}"`);
       }
-    } else if (key === "functions" || key === "avatarVideos") {
+
+    } else if (key === "avatarVideo" || key === "functions") {
+
       const target = cfg[key] as object;
       switch (op) {
-        case "append":
-          if (typeof value !== "object") throw new Error("Append requires an object");
-          cfg[key] = { ...target, ...value };
-          break;
         case "set":
-          if (typeof value !== "object") throw new Error("Set requires an object");
-          cfg[key] = value;
+          console.log("set")
+          var item;
+          try {
+              item = JSON.parse(value);
+          } catch (e) {
+              return("Set requires a keyed JSON string");
+          }
+          console.log("item",item)
+          for (const k of Object.keys(item)) {
+            console.log("item[k]",item[k])
+            if (!(item[k].url && item[k].description && key === "avatarVideo"))
+              return("Avatar Object missing path and description properties");
+          }
+          console.log("set done")
+          cfg[key] = { ...target, ...item };
           break;
         case "remove":
-          if (typeof value === "string") {
-            delete cfg[key][value];
-          } else if (Array.isArray(value)) {
-            for (const k of value) delete cfg[key][k];
-          } else {
-            throw new Error("Remove requires a key name or array of keys for object");
+          let keysToRemove: string[];
+
+          try {
+            const parsed = JSON.parse(value);
+            if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+              keysToRemove = Object.keys(parsed);
+            } else {
+              console.log("remove input not json");
+              keysToRemove = [String(value).trim()];
+            }
+          } catch {
+            keysToRemove = [value.trim()];
+          }
+
+          if (keysToRemove.length === 0) {
+            return("No keys specified to remove");
+          }
+
+          for (const k of keysToRemove) {
+            if (cfg[key][k]) {
+              delete cfg[key][k];
+            } else {
+              console.warn(`Key not found, skipping: ${k}`);
+            }
           }
           break;
         default:
-          throw new Error(`Operation "${op}" not supported on object key "${key}"`);
+          return(`Operation "${op}" not supported on object key "${key}"`);
       }
+
     } else {
+
       const target = cfg[key] as string;
       switch (op) {
         case "set":
-          cfg[key] = value;
+          cfg[key] = value as string;
+          break;
+        case "remove":
+          cfg[key] = "";
           break;
         default:
-          throw new Error(`Operation "${op}" not supported on primitive key "${key}"`);
+          return(`Operation "${op}" not supported on primitive key "${key}"`);
       }
+
     }
 
     await this.saveConfig(ConfigActionProvider.config);
-
     return `Successfully performed "${op}" on config key "${key}".`;
+
   }
 
   async saveConfig(newConfig: AgentConfig) {
@@ -244,13 +357,47 @@ export class ConfigActionProvider extends ActionProvider {
         await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
         await fs.writeFile(tmp, JSON.stringify(newConfig, null, 2));
         await fs.rename(tmp, CONFIG_PATH);
-        console.log("saved config",newConfig) 
+        //await this.symlinkAvatarVideo(newConfig.avatarVideo);
     })();
     ConfigActionProvider.configAtom = save.finally(() => {
       ConfigActionProvider.configAtom = null;
     });
     await save;
   }
+
+  /*
+  async symlinkAvatarVideo(avatarVideoConfig: Record<string, z.infer<typeof AvatarVideoSchema>>) {
+
+    await fs.mkdir(PUBLIC_AVATAR_DIR, { recursive: true });
+
+    // Clear old symlinks
+    for (const file of await fs.readdir(PUBLIC_AVATAR_DIR)) {
+      const fullPath = path.join(PUBLIC_AVATAR_DIR, file);
+      if ((await fs.lstat(fullPath)).isSymbolicLink()) {
+        await fs.unlink(fullPath);
+      }
+    }
+
+    // Create new symlinks only for local files
+    for (const [key, video] of Object.entries(avatarVideoConfig)) {
+      // Skip invalid or already public
+      if (!video?.path || video.path.startsWith("/avatarVideo/")) {
+        continue;
+      }
+
+      const source = video.path;
+      const filename = path.basename(source);
+      const linkPath = path.join(PUBLIC_AVATAR_DIR, filename);
+      const target = path.relative(PUBLIC_AVATAR_DIR, source);
+
+      await fs.symlink(target, linkPath).catch(() => {}); // ignore if exists
+
+      // Make it public in config
+      video.path = `/avatarVideo/${filename}`;
+    }
+
+  }
+ */
 
 }
 

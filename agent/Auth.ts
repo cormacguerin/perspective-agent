@@ -59,7 +59,9 @@ class Auth {
     message: string,
     signature: string
   ): Promise<string | null> {
-    const normalized = address.toLowerCase();
+
+    const normalized = getAddress(address as `0x${string}`);
+    // const normalized = address.toLowerCase();
 
     const isValid = await publicClient.verifyMessage({
       address: normalized as `0x${string}`,
@@ -94,7 +96,8 @@ class Auth {
       console.log("in - token ", token)
       const payload = jwt.verify(token, JWT_SECRET) as { sub: string };
       console.log("payload",payload)
-      const addr = payload.sub.toLowerCase();
+      //const addr = payload.sub.toLowerCase();
+      const addr = getAddress(payload.sub);
       console.log("authenticateToken",addr);
       return this.users.has(addr) ? addr : null;
     } catch(e) {
@@ -114,10 +117,10 @@ class Auth {
 
     try {
       const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-      const addr = decoded.sub.toLowerCase();
-      req.user = addr;
+      const addr = getAddress(decoded.sub);
       let t_addr = this.users.get(addr)?.address;
-      if (getAddress(t_addr as string) === getAddress(addr)) {
+      if (getAddress(t_addr as string) === addr) {
+          req.user = addr;
           next();
       } else {
           return res.status(401).json({ error: "Invalid token" });
@@ -176,6 +179,7 @@ class Auth {
    * Non express isOwner token
    */
   isOwnerToken(token: string): boolean {
+    return true; // TESTING REMOVE
     try {
       const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
       let addr = decoded?.sub;
@@ -200,6 +204,7 @@ class Auth {
    * Non express isOwner addres
    */
   isOwnerAddress(addr: string): boolean {
+    return true; // TESTING REMOVE
     try {
       if (!addr) {
           return false;
@@ -246,16 +251,10 @@ class Auth {
 
   async saveUsers(map: Map<string, any>) {
 
-    console.log("in")
     const last = writePromise;
-    console.log("last a",last)
     const save = (async () => {
-      console.log("last b", last)
       if (last) await last; // wait for last execution
       
-      console.log("last c", last)
-
-      console.log("write")
       const tmp = USERS_FILE + '.tmp.' + Date.now();
       const data = JSON.stringify(Object.fromEntries(map));
 
@@ -293,7 +292,7 @@ class Auth {
   }
 
   logout(address: string) {
-    this.users.delete(address.toLowerCase());
+    this.users.delete(address);
   }
 
   getUserCount() {

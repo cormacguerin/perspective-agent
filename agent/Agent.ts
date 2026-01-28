@@ -9,6 +9,12 @@ import { tool } from "@langchain/core/tools";
 import fs from "fs/promises";
 //import Replicate from "replicate";
 import https from "node:https";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const VITE_SERVER_URL = process.env.VITE_SERVER_URL;
+const VITE_AGENT_INSTANCE = process.env.VITE_AGENT_INSTANCE;
 
 import {
   AgentConfig,
@@ -37,17 +43,19 @@ class Agent {
   private static agent: any;
   private static tools: any;
 
-  private readonly auth: any;
-
-  constructor(auth: any) {
+  constructor(private readonly auth: any, private readonly userAddress: any, private readonly db: any) {
     this.auth = auth;
+    this.userAddress = userAddress;
+    this.db = db;
   }
 
   // safe init
-  init(): Promise<void> {
+  async init(): Promise<void> {
       if (Agent.initPromise === null) {
           Agent.initPromise = this.initPromise();
       }
+      const { agentkit, walletProvider, actionProviders } = await prepareAgentkitAndWalletProvider(this.auth, this.userAddress, this.db)
+      Agent._providers = actionProviders;
 
       return Agent.initPromise;
   }
@@ -92,12 +100,11 @@ class Agent {
 
     // return agent if already created
     if (Agent._agents.has(sessionId)) {
-      return Agent._agents.get(sessionId)!;
+        return Agent._agents.get(sessionId)!;
     }
 
-    const { agentkit, walletProvider, actionProviders } = await prepareAgentkitAndWalletProvider(this.auth, reqAddr)
+    const { agentkit, walletProvider, actionProviders } = await prepareAgentkitAndWalletProvider(this.auth, reqAddr, this.db)
 
-    Agent._providers = actionProviders;
     const tools = await getLangChainTools(agentkit)
 
     // LLM setup
@@ -134,9 +141,9 @@ class Agent {
           ${(Agent.config.topics ?? []).length > 0 ?
             `Topics: Your Specific Areas of Expertise are ${(Agent.config.topics ?? []).join(',\n')}\n\n` : ''}
 
-          ${(Agent.config.functions ?? []).length > 0 ? `
-            Agent Functions: You have the following agent functions installed:
-            ${(Agent.config.functions ?? []).map((fn: string) => `• ${fn}`).join('\n')}
+          ${Object.keys(Agent.config.functions ?? {}).length > 0 ? `
+            Agent Functions: You have the following functions installed:
+            ${Object.keys(Agent.config.functions ?? {}).map((name: string) => `• ${name}`).join('\n')}
           `.trim() : ''}
 
           ${(Agent.config.rules ?? []).length > 0 ?
@@ -239,6 +246,7 @@ class Agent {
 
     //  When both tasks complete, return text
     const emoCtx = await emoCtxPromise;
+    console.log("emoCtx",emoCtx)
 
     console.log("askStream return",text)
 
@@ -268,12 +276,14 @@ class Agent {
             Base your selection mostly on action and context.
             Only return an action or context if it is a good match for the user request.
 
-            RULES:
+            LIST:
+            ${JSON.stringify(Agent.config?.avatarVideo)}
+
+            MAIN RULES:
             - ALWAYS RETURN JSON
             - ONLY output one single action name (if relevant).
             - Always generate context e.g 'Trending Crypto' or 'Book a meeting', or 'Onchain Purchase'
             - Always generate emotion e.g neutral
-            -
             -
             - NEVER output dialogue.
             - ALWAYS return a raw JSON object without any extra text or comments that would make it unparsable.
@@ -287,8 +297,30 @@ class Agent {
                 "emotion": "happy excited"
               }
 
-            LIST:
-            ${JSON.stringify(Agent.config?.avatarVideos)}
+            # OWNER / EDITOR SECTION
+
+            AVATARS: When asked to add or update an avatar
+
+            ALWAYS update both the datastore and the agent configuration when working with Avatars.
+            ALWAYS use the EXACT datastore ID in the URL.
+            
+            1. Determine the datastore ID of the video either by context or lookup
+            2. Construct the video URL EXACTLY as:
+               "${VITE_SERVER_URL}/${VITE_AGENT_INSTANCE}/dataStore/<DATASTORE_ID>"
+            3. Update the dataStore with the correct avatar information.
+            4. Insert the video into the agent configs 'avatarVideo' as a KEYED OBJECT: eg.
+
+            "avatarVideo": {
+              "paichan-star-wars-light-saber": {
+                "url": "${VITE_SERVER_URL}/${VITE_AGENT_INSTANCE}/dataStore/<data-store-id>" eg. data-1765652392432-kiaej,
+                "description": "The avatar is using a light saber",
+                "idle": true,
+                "talking": false,
+                "bored": false
+              }
+            }
+            5. Do NOT set 'idle' or 'bored' unless it is clearly implied
+
           `,
         },
         { role: "user", content: userMessage },

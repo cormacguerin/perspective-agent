@@ -6,9 +6,10 @@ import { BrowserProvider } from "ethers";
 import Message from "./Message";
 import ModalController from "./ModalController"
 import InlineController from "./InlineController"
+import MediaQueue from "./MediaQueue"
 
 
-export default function Chat({ address }) {
+export default function Chat({ address, onVideoAction }) {
 
   const [messages, setMessages] = useState([
     { role: "assistant", type: "chat", content: "How can I help you today ?" }
@@ -21,7 +22,8 @@ export default function Chat({ address }) {
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [recentUploads, setRecentUploads] = useState([]);
   const [toolAction, setToolAction] = useState("");
-  const toolActionRef = useRef("");
+  const [pendingMedia, setPendingMedia] = useState([]);
+  const toolActionRef = useRef(""); // track current tool
   const isLoadingRef = useRef(isLoading);
   const isFileLoadingRef = useRef(isFileLoading);
   const fileInputRef = useRef(null);
@@ -33,7 +35,8 @@ export default function Chat({ address }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const [userAgentWallet, setUserAgentWallet] = useState("0x");
+  const [ownerAgentWallet, setOwnerAgentWallet] = useState("");
+  const [userAgentWallet, setUserAgentWallet] = useState("");
   const [nonce, setNonce] = useState("");
 
   useEffect(() => {
@@ -48,9 +51,30 @@ export default function Chat({ address }) {
     fetch(`/getOwner?address=${encodeURIComponent(address)}`)
       .then(r => r.json())
       .then(d => {
-        setUserAgentWallet(d.owner || "");
+        setOwnerAgentWallet(d.owner || "");
         setNonce(d.nonce); 
      });
+  }, []);
+
+  useEffect(() => {
+
+    const jwt = localStorage.getItem("pai_agent_auth_token");
+    if (!jwt) {
+      console.log("No token in localStorage");
+      return;
+    }
+
+    fetch("/authToken", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${jwt}`
+      }
+    })
+      .then(response => {
+        if (!response.ok) throw new Error(response.status);
+        return response.json();
+      })
+      .then(data => setUserAgentWallet(data.token));
   }, []);
 
   useEffect(() => {
@@ -71,8 +95,6 @@ export default function Chat({ address }) {
 
     try {
 
-      console.log("start")
-
       const res = await fetch("/upload", {
         method: "POST",
         headers: {
@@ -84,18 +106,23 @@ export default function Chat({ address }) {
       const data = await res.json();
       console.log("data",data)
       setRecentUploads(uploadArr => {
+
         const newEntry = {
           id: data.id,
-          name: data.originalName || "file",
-          ts: Date.now()
+          originalName: data.originalName || "file",
+          fileName: data.filename,
+          path: data.path,
+          ts: Date.now(),
+          owner: userAgentWallet || ""
         };
 
         const updatedArr = [newEntry, ...uploadArr];
         return updatedArr.slice(0, 10);
+
       });
 
-      // This is the magic line
-      setInput(`File uploaded – reference ID: ${data.id}\n\n` + input);
+      // add context into prompt (legacy)
+      // setInput(`File uploaded – reference ID: ${data.id}\n\n` + input);
 
       // Optional: auto-focus and put cursor at end
       // setTimeout(() => textareaRef.current?.focus(), 100);
@@ -118,7 +145,12 @@ export default function Chat({ address }) {
     const fileContext = recentUploads.length > 0
     ? "\n\n: file uploads (for reference only):\n" +
       recentUploads
-        .map(f => `• ID: ${f.id} – ${f.name}`)
+        .map(f => `
+• ID: ${f.id}
+• Filename: ${f.filename}
+• Original File Name: ${f.originalName}
+• Path: ${f.path}
+          `)
         .join("\n")
     : "";
 
@@ -147,7 +179,8 @@ export default function Chat({ address }) {
     // Start SSE : TODO, we should send the message via post and stream response via sse.
     eventSourceRef.current = new EventSource(chatQuery);
 
-    setRecentUploads([]);
+    // Set Talking Video
+    onVideoAction("talking");
 
     // Tokens from the agent sse stream
     eventSourceRef.current.addEventListener("token", async (e) => {
@@ -168,6 +201,7 @@ export default function Chat({ address }) {
 
     // Tool output from the stream (this is the raw tool output) - one big block (todo: review)
     eventSourceRef.current.addEventListener("tool", async (e) => {
+      console.log("tool", e.data)
       try {
         const dataStr = e.data.toString();
         const data = JSON.parse(dataStr);
@@ -179,6 +213,7 @@ export default function Chat({ address }) {
         );
         setToolAction(data?.msg?.kwargs?.name); // set the current tool name
         toolActionRef.current = data?.msg?.kwargs?.name;
+        handleNewToolMedia(data);
       } catch (err) {
         console.log("Tool parse error:", err);
       }
@@ -218,9 +253,11 @@ export default function Chat({ address }) {
 
       // Optional: trigger avatar/video/emotion stuff
       if (result.emoCtx?.emotion) {
+        onVideoAction(result.emoCtx.action);
         // emit("emoCtx", result.emoCtx);
       }
       if (result.emoCtx?.action) {
+
         // pushVideo(result.emoCtx.action);
       }
 
@@ -232,6 +269,52 @@ export default function Chat({ address }) {
       setMessages(prev => [...prev, { role: "assistant", style: streamingStyle, mode: streamingMode, content: "Sorry, something went wrong. Try again?" }]);
       eventSourceRef.current?.close();
     };
+  };
+
+  const handleNewToolMedia = (toolData) => {
+    console.log("handleNewToolMedia",toolData)
+    const content = toolData?.msg?.kwargs?.content;
+    const toolName = toolData?.msg?.kwargs?.name;
+    console.log("toolName",toolName)
+
+    // Simple check: is this a video tool?
+    if (toolName === "GenerateVideoProvider_generateVideo" || content?.action === "GenerateVideoProvider_generateVideo") {
+
+      var genMsg;
+      try {
+        genMsg = JSON.parse(content);
+      } catch(e) {
+        console.log(e)
+        return;
+      }
+
+      console.log("in gen video",genMsg)
+      const pId = genMsg?.result?.prompt_id || genMsg?.id;
+      if (!pId) return;
+
+      setPendingMedia(prev => {
+        console.log("setPendingMedia prev", prev)
+        if (prev.find(v => v.promptId === pId)) return prev;
+        return [{
+          id: pId,
+          promptId: pId,
+          status: "generating",
+          createdAt: Date.now(),
+        }, ...prev];
+      });
+    }
+  };
+
+  // Remove handler
+  const handleRemove = (id) => {
+    setPendingMedia(prev => prev.filter(v => v.id !== id));
+  };
+
+  // Play handler
+  const handlePlay = (video) => {
+    // emit to main player / set current video
+    onVideoAction({context:"custom",video});
+    // e.g. setCurrentVideo(video.url);
   };
 
   const handleKeyDown = (e) => {
@@ -277,6 +360,15 @@ export default function Chat({ address }) {
           />
         )}
 
+        {pendingMedia.length > 0 && (
+          <MediaQueue
+            pendingMedia={pendingMedia}
+            onRemove={handleRemove}
+            onPlay={handlePlay}
+            className="my-4"
+          />
+        )}
+
     {/*
         <InlineController
           action={toolAction}
@@ -288,7 +380,53 @@ export default function Chat({ address }) {
 
       </div>
 
-      {!userAgentWallet && (
+      {!userAgentWallet && ownerAgentWallet && (
+        <div className="p-6 text-center">
+          <button
+            onClick={async () => {
+              try {
+                // 1. Request wallet
+                if (!window.ethereum) {
+                  alert("No wallet found");
+                  return;
+                }
+
+                const provider = new BrowserProvider(window.ethereum);
+                const signer = await provider.getSigner();
+                const address = await signer.getAddress();
+
+                const message = `
+                  PerspectiveAI Agent Connect.
+                  Address: ${address}
+                  Nonce: ${nonce}
+                `.trim();
+
+                const signature = await signer.signMessage(message);
+
+                const result = await fetch("/authUser", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ address, signature, message }),
+                }).then(r => r.json());
+
+                if (result?.token) {
+                  setUserAgentWallet(address);
+                  localStorage.setItem("pai_agent_auth_token", result.token);
+                } else {
+                  alert("Signature invalid");
+                }
+              } catch (err) {
+                console.error(err);
+                alert("Wallet login failed");
+              }
+            }}
+            className="px-10 py-5 text-lg font-bold bg-gradient-to-r from-cyan-500 to-purple-600 rounded-3xl text-white shadow-xl hover:scale-105 transition"
+          >
+            Login
+          </button>
+        </div>
+      )}
+      {!ownerAgentWallet && (
         <div className="p-6 text-center">
           <button
             onClick={async () => {
@@ -318,7 +456,7 @@ export default function Chat({ address }) {
                 }).then(r => r.json());
 
                 if (result?.token) {
-                  setUserAgentWallet(address);
+                  setOwnerAgentWallet(address);
                   localStorage.setItem("pai_agent_auth_token", result.token);
                 } else {
                   alert("Signature invalid");
@@ -417,6 +555,26 @@ export default function Chat({ address }) {
               )}
             </button>
           </div>
+
+    {/*
+          <div className="flex flex-col h-full">
+            <div className="flex-1 overflow-y-auto p-4">
+              {messages.map((m) => (
+                <Message key={m.id} message={m} />
+              ))}
+
+              {pendingMedia.length > 0 && (
+                <MediaQueue
+                  pendingMedia={pendingMedia}
+                  onRemove={handleRemove}
+                  onPlay={handlePlay}
+                  className="my-4"
+                />
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+*/}
 
           {/* Optional subtle hint text below */}
           <p className="text-center text-xs text-gray-500 mt-3 opacity-70">

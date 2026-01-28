@@ -31,6 +31,9 @@ import {
 import {
   dataStoreActionProvider, // custom provider for data storage
 } from "./providers/dataStoreActionProvider.js";
+import {
+  generateVideoProvider, // custom provider for data storage
+} from "./providers/generateVideoProvider.js";
 
 import { createWalletClient, http, publicActions } from 'viem';  // viem is auto-available via AgentKit
 import { mainnet } from 'viem/chains';  // or your chain
@@ -70,7 +73,7 @@ type WalletData = {
  *
  * @throws {Error} If the agent initialization fails.
  */
-export async function prepareAgentkitAndWalletProvider(authProvider: any, reqAddr: string): Promise<{
+export async function prepareAgentkitAndWalletProvider(authProvider: any, reqAddr: string, db: any): Promise<{
   agentkit: AgentKit;
   walletProvider: WalletProvider;
   actionProviders: any;
@@ -114,6 +117,14 @@ export async function prepareAgentkitAndWalletProvider(authProvider: any, reqAdd
     });
 
     console.log("Connected via Coinbase Smart Wallet");
+
+    const dataStore = dataStoreActionProvider(authProvider, reqAddr, db);
+
+    const generateVideo = generateVideoProvider(
+      authProvider,
+      dataStore
+    );
+
     const actionProviders = {
       weth: wethActionProvider(),
       wallet:walletActionProvider(),
@@ -125,12 +136,8 @@ export async function prepareAgentkitAndWalletProvider(authProvider: any, reqAdd
       dexScreener:dexScreenerActionProvider(),
       basic:basicActionProvider(),
       config:configActionProvider(authProvider, reqAddr),
-      dataStore:dataStoreActionProvider(authProvider, reqAddr)
-        //zeroXActionProvider(),
-        //pythProvider,
-        //tradeStrategyActionProvider(),
-        //tradeProvider,
-        //swapActionProvider(),
+      dataStore,
+      generateVideo
     };
 
     const agentkit = await AgentKit.from({
